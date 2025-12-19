@@ -1,0 +1,523 @@
+import React, { Component, createContext, useContext, useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { createClient } from '@supabase/supabase-js';
+import { 
+  LayoutDashboard, Wallet, Wrench, Megaphone, LogOut, Briefcase, 
+  PlusCircle, User, DollarSign, CheckCircle, ArrowLeft, Loader2, 
+  MapPin, Calculator, CreditCard, Upload, FileText, Trash2, Calendar, 
+  Clock, AlertTriangle, XCircle, Save, ChevronDown, ChevronUp, Printer
+} from 'lucide-react';
+
+// --- DADOS DA EMPRESA ---
+const EMPRESA = {
+  nome: "TEMPORI PLANEJADOS LTDA",
+  cnpj: "32.255.794/0001-20",
+  endereco: "AV. ALVARO CALHEIROS, 1030, JATIUCA, MACEIÓ, ALAGOAS"
+};
+
+// --- UTILITÁRIOS ---
+const validarCPF = (cpf) => {
+  cpf = cpf.replace(/[^\d]+/g, '');
+  if (cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
+  let soma = 0, resto;
+  for (let i = 1; i <= 9; i++) soma = soma + parseInt(cpf.substring(i-1, i)) * (11 - i);
+  resto = (soma * 10) % 11;
+  if ((resto === 10) || (resto === 11)) resto = 0;
+  if (resto !== parseInt(cpf.substring(9, 10))) return false;
+  soma = 0;
+  for (let i = 1; i <= 10; i++) soma = soma + parseInt(cpf.substring(i-1, i)) * (12 - i);
+  resto = (soma * 10) % 11;
+  if ((resto === 10) || (resto === 11)) resto = 0;
+  if (resto !== parseInt(cpf.substring(10, 11))) return false;
+  return true;
+};
+
+const BRL = (valor) => valor.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
+
+// --- 0. ERROR BOUNDARY ---
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, errorInfo) { console.error("Erro:", error, errorInfo); }
+  render() {
+    if (this.state.hasError) return <div className="p-10 text-red-600 bg-red-50 h-screen"><h1>Erro Crítico</h1><p>{this.state.error?.message}</p><button onClick={()=>window.location.href='/'} className="mt-4 bg-red-600 text-white p-2 rounded">Reiniciar</button></div>;
+    return this.props.children;
+  }
+}
+
+// --- 1. CONFIGURAÇÃO ---
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const supabase = createClient(supabaseUrl, supabaseKey)
+
+// --- 2. AUTH ---
+const AuthContext = createContext({});
+function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [perfil, setPerfil] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) { setUser(session.user); supabase.from('perfis').select('*').eq('id', session.user.id).single().then(({ data }) => setPerfil(data)); }
+      setLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if(session?.user) supabase.from('perfis').select('*').eq('id', session.user.id).single().then(({ data }) => setPerfil(data));
+      setLoading(false);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+  return <AuthContext.Provider value={{ user, perfil, loading, logout: () => supabase.auth.signOut() }}>{!loading && children}</AuthContext.Provider>;
+}
+const useAuth = () => useContext(AuthContext);
+
+// --- 3. SIDEBAR (Oculta na impressão) ---
+function Sidebar() {
+  const { perfil, logout } = useAuth();
+  const location = useLocation();
+  const menus = [
+    { name: 'Dashboard', path: '/', icon: <LayoutDashboard size={20}/>, roles: ['admin', 'financeiro', 'consultor', 'conferente', 'montador', 'marketing'] },
+    { name: 'Comercial', path: '/comercial', icon: <Briefcase size={20}/>, roles: ['admin', 'consultor', 'financeiro'] },
+    { name: 'Financeiro', path: '/financeiro', icon: <Wallet size={20}/>, roles: ['admin', 'financeiro'] },
+    { name: 'Técnico / Obras', path: '/assistencia', icon: <Wrench size={20}/>, roles: ['admin', 'consultor', 'conferente', 'montador', 'financeiro'] },
+    { name: 'Marketing', path: '/marketing', icon: <Megaphone size={20}/>, roles: ['admin', 'consultor', 'marketing', 'financeiro'] },
+  ];
+  return (
+    <aside className="w-64 bg-slate-900 text-white flex flex-col h-screen fixed z-50 overflow-y-auto print:hidden">
+      <div className="p-6 border-b border-slate-800"><h1 className="text-2xl font-bold text-blue-400">TemporiPro</h1><p className="text-xs mt-2 text-slate-400 font-bold">{perfil?.nome_completo}</p></div>
+      <nav className="flex-1 p-2 space-y-1">
+        {menus.map(m => {
+          if (perfil?.cargo !== 'admin' && !m.roles.includes(perfil?.cargo)) return null;
+          const active = location.pathname.includes(m.path) && m.path !== '/';
+          return <Link key={m.path} to={m.path} className={`flex gap-3 px-4 py-3 rounded transition-colors ${active ? 'bg-blue-600 text-white' : 'hover:bg-slate-800 text-slate-300'}`}>{m.icon} <span>{m.name}</span></Link>;
+        })}
+      </nav>
+      <div className="p-4 border-t border-slate-800"><button onClick={logout} className="flex gap-2 text-red-400 hover:text-red-300 w-full"><LogOut size={20}/> Sair</button></div>
+    </aside>
+  );
+}
+
+// --- 4. ORÇAMENTO ---
+const FATOR_MULTIPLICACAO = 3.97;
+function Orcamento() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const [etapa, setEtapa] = useState(1); 
+  const [clienteNome, setClienteNome] = useState('');
+  const [ambientes, setAmbientes] = useState([]); 
+  const [descontoPercent, setDescontoPercent] = useState(0);
+
+  const custoGeral = ambientes.reduce((acc, amb) => acc + amb.custoTotal, 0);
+  const valorVendaTabela = custoGeral * FATOR_MULTIPLICACAO;
+  const valorDesconto = valorVendaTabela * (descontoPercent / 100);
+  const valorFinal = valorVendaTabela - valorDesconto;
+
+  const handleFileUpload = (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+    const promessas = files.map(file => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const text = event.target.result;
+          const itens = text.split('\n').map(line => {
+             const parts = line.split(/[;,]/);
+             if (parts.length < 2) return null;
+             return { descricao: parts[0].trim(), custo: parseFloat(parts[1].replace(/[R$ ]/g, '').replace(',', '.')) || 0 };
+          }).filter(Boolean);
+          const custoTotal = itens.reduce((a, b) => a + b.custo, 0);
+          resolve({ nome: file.name.replace(/\.[^/.]+$/, ""), itens, custoTotal });
+        };
+        reader.readAsText(file);
+      });
+    });
+    Promise.all(promessas).then(novos => setAmbientes([...ambientes, ...novos]));
+  };
+
+  const handleAprovar = async () => {
+    if (!clienteNome) return alert("Preencha o nome do cliente.");
+    try {
+      const { data: orc, error } = await supabase.from('orcamentos').insert([{
+        cliente_nome: clienteNome, ambientes: ambientes, custo_total: custoGeral, markup_percentual: (FATOR_MULTIPLICACAO - 1) * 100,
+        valor_venda_sugerido: valorVendaTabela, desconto: valorDesconto, desconto_percentual: descontoPercent, valor_final: valorFinal, status: 'aprovado', vendedor_id: user.id
+      }]).select().single();
+      if (error) throw error;
+      navigate(`/fechamento/${orc.id}`);
+    } catch (e) { alert("Erro ao salvar: " + e.message); }
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto pb-20">
+      <div className="flex items-center gap-4 mb-6"><button onClick={() => etapa === 1 ? navigate('/comercial') : setEtapa(1)} className="p-2 hover:bg-gray-200 rounded-full"><ArrowLeft /></button><h1 className="text-3xl font-bold text-gray-800">{etapa === 1 ? 'Importar Arquivos' : 'Apresentação Comercial'}</h1></div>
+      {etapa === 1 && (
+        <div className="grid md:grid-cols-2 gap-8">
+          <div className="bg-white p-8 rounded-xl shadow border border-dashed border-2 border-blue-200 text-center hover:bg-blue-50 transition">
+            <Upload size={48} className="mx-auto text-blue-400 mb-4"/><h2 className="text-xl font-bold text-blue-800 mb-2">Anexar Arquivos .txt</h2><input type="file" multiple accept=".txt" onChange={handleFileUpload} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+            {ambientes.length > 0 && <div className="mt-6 text-left space-y-2"><p className="font-bold text-gray-700 border-b pb-1">Carregados:</p>{ambientes.map((amb, idx) => (<div key={idx} className="flex justify-between bg-white p-2 border rounded shadow-sm"><span className="font-medium flex items-center gap-2"><FileText size={16}/> {amb.nome}</span><button onClick={() => setAmbientes(ambientes.filter((_, i) => i !== idx))} className="text-red-400 hover:text-red-600"><Trash2 size={16}/></button></div>))}</div>}
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow border border-gray-100 flex flex-col">
+            <h2 className="text-lg font-bold text-gray-800 mb-4">Dados Iniciais</h2><label className="block text-sm font-bold text-gray-600 mb-1">Nome do Cliente</label><input className="w-full p-3 border rounded mb-4" value={clienteNome} onChange={e => setClienteNome(e.target.value)} placeholder="Ex: Sr. João"/>
+            <button onClick={() => ambientes.length > 0 ? setEtapa(2) : alert('Adicione arquivos.')} className={`w-full py-3 rounded font-bold text-white transition ${ambientes.length > 0 ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-400 cursor-not-allowed'}`}>Gerar Proposta →</button>
+          </div>
+        </div>
+      )}
+      {etapa === 2 && (
+        <div className="grid md:grid-cols-3 gap-6">
+          <div className="bg-slate-100 p-6 rounded-xl border border-slate-200 h-fit"><h2 className="text-sm font-bold text-slate-500 uppercase mb-4 flex gap-2"><Calculator size={16}/> Ajuste Comercial</h2><div className="space-y-4"><div><label className="text-sm font-bold text-slate-700">Desconto (%)</label><div className="relative"><input type="number" className="w-full p-2 border rounded pr-8" value={descontoPercent} onChange={e => setDescontoPercent(Number(e.target.value))} /><span className="absolute right-3 top-2 text-gray-500 font-bold">%</span></div><p className="text-xs text-green-600 mt-1 font-bold"> - {BRL(valorDesconto)}</p></div></div></div>
+          <div className="md:col-span-2 bg-white p-8 rounded-xl shadow-lg border relative">
+            <div className="flex justify-between items-start mb-6 border-b pb-4"><div><h2 className="text-3xl font-bold text-gray-800">{clienteNome || 'Cliente'}</h2></div><div className="text-right"><p className="text-xs text-gray-400 uppercase font-bold">Data</p><p className="font-mono">{new Date().toLocaleDateString()}</p></div></div>
+            <div className="space-y-4 mb-8">{ambientes.map((amb, idx) => (<div key={idx} className="bg-gray-50 rounded-lg p-4 border border-gray-100 flex justify-between items-center"><h3 className="font-bold text-lg text-blue-900 flex items-center gap-2"><Briefcase size={18}/> {amb.nome}</h3><span className="font-bold text-gray-700">{BRL(amb.custoTotal * FATOR_MULTIPLICACAO)}</span></div>))}</div>
+            <div className="flex flex-col items-end border-t pt-6"><div className="flex justify-between w-64 text-4xl font-bold text-blue-900 pt-3 mt-2"><span>Total:</span><span>{BRL(valorFinal)}</span></div></div>
+            <div className="mt-10 flex gap-4 justify-end"><button onClick={handleAprovar} className="px-8 py-4 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 shadow-xl flex items-center gap-2 transform hover:scale-105 transition"><CheckCircle size={24} /> Aprovar Orçamento</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- 5. FECHAMENTO ---
+function Fechamento() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [buscandoCep, setBuscandoCep] = useState(false);
+  const [orcamento, setOrcamento] = useState(null);
+  const [cliente, setCliente] = useState({ nome: '', cpf: '', email: '', telefone: '', cep: '', endereco: '', numero: '', complemento: '', bairro: '', cidade: 'Maceió', estado: 'AL' });
+  const [pagamentos, setPagamentos] = useState([]); 
+  const [novoPagamento, setNovoPagamento] = useState({ metodo: 'CARTÃO DE CRÉDITO', parcelas: 1, valor: 0, dataInicio: new Date().toISOString().split('T')[0] });
+
+  useEffect(() => {
+    if(!id) return;
+    supabase.from('orcamentos').select('*').eq('id', id).single().then(({data}) => { if(data) { setOrcamento(data); setCliente(prev => ({...prev, nome: data.cliente_nome})); setNovoPagamento(prev => ({...prev, valor: data.valor_final})) } });
+  }, [id]);
+
+  const buscarCep = async () => {
+    const cepLimpo = cliente.cep.replace(/\D/g, '');
+    if (cepLimpo.length !== 8) return;
+    setBuscandoCep(true);
+    try { const resp = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`); const data = await resp.json(); if (!data.erro) setCliente(prev => ({...prev, endereco: data.logradouro, bairro: data.bairro, cidade: data.localidade, estado: data.uf})); } catch (e) { console.error(e); } finally { setBuscandoCep(false); }
+  };
+
+  const adicionarPagamento = () => {
+    const valorParcela = novoPagamento.valor / novoPagamento.parcelas;
+    const novosItens = [];
+    for (let i = 0; i < novoPagamento.parcelas; i++) {
+      const data = new Date(novoPagamento.dataInicio); data.setMonth(data.getMonth() + i);
+      novosItens.push({ metodo: novoPagamento.metodo, valor: valorParcela, vencimento: data.toISOString().split('T')[0], parcela: `${i + 1}/${novoPagamento.parcelas}` });
+    }
+    setPagamentos([...pagamentos, ...novosItens]);
+  };
+
+  const handleFinalizar = async () => {
+    const camposObrigatorios = ['nome','cpf','email','telefone','cep','endereco','numero','bairro'];
+    const vazios = camposObrigatorios.filter(c => !cliente[c]);
+    if(vazios.length > 0) return alert(`Preencha: ${vazios.join(', ').toUpperCase()}`);
+    if (!validarCPF(cliente.cpf)) return alert("CPF Inválido!");
+
+    const totalLancado = pagamentos.reduce((acc, p) => acc + p.valor, 0);
+    const restante = orcamento.valor_final - totalLancado;
+    if (Math.abs(restante) > 0.1) return alert(`Diferença financeira: ${BRL(restante)}`);
+    
+    setLoading(true);
+    try {
+      const { data: cli, error: e1 } = await supabase.from('clientes').insert([{ ...cliente }]).select().single();
+      if(e1) throw e1;
+      const descritivo = orcamento.ambientes ? orcamento.ambientes.map(a => a.nome).join(', ') : "Venda Geral";
+      const { data: cont, error: e2 } = await supabase.from('contratos').insert([{
+        cliente_id: cli.id, vendedor_id: user.id, numero_contrato: `CTR-${Math.floor(Math.random()*100000)}`,
+        valor_total: orcamento.valor_final, descricao_venda: descritivo, forma_pagamento: "Múltiplo", condicoes_pagamento: "Detalhado",
+        orcamento_origem_id: orcamento.id, status: 'vendido', itens_venda: orcamento.ambientes
+      }]).select().single();
+      if(e2) throw e2;
+      const parcelasParaSalvar = pagamentos.map((p, idx) => ({ contrato_id: cont.id, metodo: p.metodo, valor_parcela: p.valor, data_vencimento: p.vencimento, numero_parcela: idx + 1, total_parcelas_origem: pagamentos.length }));
+      await supabase.from('pagamentos_contrato').insert(parcelasParaSalvar);
+      await supabase.from('pendencias').insert([{ cliente_id: cli.id, contrato_id: cont.id, descricao: "Medição Técnica", status: 'aberto', observacao_tecnica: descritivo }]);
+      
+      // REDIRECIONAMENTO DIRETO PARA O CONTRATO (PARA IMPRESSÃO)
+      alert('Venda Finalizada! Redirecionando para impressão do contrato...');
+      navigate(`/contrato/${cont.id}`);
+    } catch (e) { alert("Erro: " + e.message); } finally { setLoading(false); }
+  };
+
+  if (!orcamento) return <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
+
+  return (
+    <div className="max-w-6xl mx-auto pb-20">
+      <h1 className="text-3xl font-bold text-gray-800 mb-6">Fechamento de Contrato</h1>
+      <div className="grid md:grid-cols-3 gap-8">
+        <div className="md:col-span-2 space-y-6">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <h2 className="text-lg font-bold text-blue-800 mb-4 flex gap-2"><User size={20}/> Dados do Cliente</h2>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="md:col-span-2"><label className="text-xs font-bold text-gray-500">Nome *</label><input className="w-full p-2 border rounded border-blue-100" value={cliente.nome} onChange={e=>setCliente({...cliente, nome:e.target.value})} /></div>
+              <div><label className="text-xs font-bold text-gray-500">CPF *</label><input className="w-full p-2 border rounded border-blue-100" placeholder="000.000.000-00" value={cliente.cpf} onChange={e=>setCliente({...cliente, cpf:e.target.value})} /></div>
+              <div><label className="text-xs font-bold text-gray-500">Email *</label><input className="w-full p-2 border rounded border-blue-100" value={cliente.email} onChange={e=>setCliente({...cliente, email:e.target.value})} /></div>
+              <div><label className="text-xs font-bold text-gray-500">Telefone *</label><input className="w-full p-2 border rounded border-blue-100" value={cliente.telefone} onChange={e=>setCliente({...cliente, telefone:e.target.value})} /></div>
+              <div className="relative"><label className="text-xs font-bold text-gray-500">CEP *</label><input className="w-full p-2 border rounded border-blue-100" value={cliente.cep} onChange={e=>setCliente({...cliente, cep:e.target.value})} onBlur={buscarCep} />{buscandoCep && <Loader2 size={16} className="absolute right-2 top-8 animate-spin"/>}</div>
+              <div className="md:col-span-3"><label className="text-xs font-bold text-gray-500">Endereço *</label><input className="w-full p-2 border rounded bg-gray-50" value={cliente.endereco} onChange={e=>setCliente({...cliente, endereco:e.target.value})} /></div>
+              <div><label className="text-xs font-bold text-gray-500">Número *</label><input className="w-full p-2 border rounded border-blue-100" value={cliente.numero} onChange={e=>setCliente({...cliente, numero:e.target.value})} /></div>
+              <div><label className="text-xs font-bold text-gray-500">Compl.</label><input className="w-full p-2 border rounded border-blue-100" value={cliente.complemento} onChange={e=>setCliente({...cliente, complemento:e.target.value})} /></div>
+              <div className="md:col-span-2"><label className="text-xs font-bold text-gray-500">Bairro *</label><input className="w-full p-2 border rounded bg-gray-50" value={cliente.bairro} onChange={e=>setCliente({...cliente, bairro:e.target.value})} /></div>
+            </div>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <h2 className="text-lg font-bold text-green-700 mb-4 flex gap-2"><CreditCard size={20}/> Financeiro</h2>
+            <div className="bg-green-50 p-4 rounded-lg border border-green-100 mb-6">
+               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                 <div><label className="text-xs font-bold block mb-1">Método</label><select className="w-full p-2 border rounded text-sm" value={novoPagamento.metodo} onChange={e => setNovoPagamento({...novoPagamento, metodo: e.target.value})}>{['DINHEIRO', 'PIX', 'BOLETO', 'CARTÃO DE CRÉDITO', 'TRANSFERENCIA', 'PERMUTA'].map(m => <option key={m}>{m}</option>)}</select></div>
+                 <div><label className="text-xs font-bold block mb-1">Parcelas</label><select className="w-full p-2 border rounded text-sm" value={novoPagamento.parcelas} onChange={e => setNovoPagamento({...novoPagamento, parcelas: Number(e.target.value)})}>{[...Array(24)].map((_, i) => <option key={i} value={i+1}>{i+1}x</option>)}</select></div>
+                 <div><label className="text-xs font-bold block mb-1">Valor (R$)</label><input type="number" className="w-full p-2 border rounded text-sm" value={novoPagamento.valor} onChange={e => setNovoPagamento({...novoPagamento, valor: Number(e.target.value)})} /></div>
+                 <div><label className="text-xs font-bold block mb-1">1º Vencimento</label><input type="date" className="w-full p-2 border rounded text-sm" value={novoPagamento.dataInicio} onChange={e => setNovoPagamento({...novoPagamento, dataInicio: e.target.value})} /></div>
+               </div>
+               <button onClick={adicionarPagamento} className="w-full bg-green-600 text-white py-2 rounded font-bold text-sm hover:bg-green-700">+ Adicionar Parcelas</button>
+            </div>
+            <div className="space-y-2 max-h-60 overflow-y-auto">{pagamentos.map((p, idx) => (<div key={idx} className="flex items-center gap-2 text-sm bg-gray-50 p-2 rounded border"><span className="font-bold w-24 text-xs">{p.metodo} ({p.parcela})</span><input type="date" className="p-1 border rounded w-32 text-xs" value={p.vencimento} onChange={(e) => { const novos = [...pagamentos]; novos[idx].vencimento = e.target.value; setPagamentos(novos); }}/><input type="number" className="p-1 border rounded w-24 text-xs" value={p.valor} onChange={(e) => { const novos = [...pagamentos]; novos[idx].valor = Number(e.target.value); setPagamentos(novos); }}/><button onClick={() => setPagamentos(pagamentos.filter((_, i) => i !== idx))} className="text-red-500 ml-auto"><Trash2 size={16}/></button></div>))}</div>
+          </div>
+        </div>
+        <div className="h-fit space-y-4">
+           <div className="bg-gray-800 text-white p-6 rounded-xl shadow-lg">
+              <h3 className="font-bold border-b border-gray-600 pb-2 mb-4">Resumo</h3>
+              <div className="flex justify-between mb-2"><span>Total:</span><span>{BRL(orcamento.valor_final)}</span></div>
+              <div className="flex justify-between mb-4"><span>Lançado:</span><span>{BRL(pagamentos.reduce((acc, p) => acc + p.valor, 0))}</span></div>
+              <button onClick={handleFinalizar} disabled={loading} className="w-full py-3 rounded font-bold flex justify-center items-center gap-2 bg-green-500 hover:bg-green-600">{loading ? <Loader2 className="animate-spin"/> : <CheckCircle />} Finalizar Venda</button>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- 6. GESTÃO DE CONTRATO (IMPRESSÃO E CRONOGRAMA) ---
+function DetalhesContrato() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [contrato, setContrato] = useState(null);
+  const [pagamentos, setPagamentos] = useState([]);
+  const [tab, setTab] = useState('geral');
+  const [expandedAmbiente, setExpandedAmbiente] = useState(null);
+  const [modoImpressao, setModoImpressao] = useState(false);
+
+  useEffect(() => {
+    if(!id) return;
+    supabase.from('contratos').select('*, clientes(*), pendencias(*)').eq('id', id).single().then(({data}) => setContrato(data));
+    supabase.from('pagamentos_contrato').select('*').eq('contrato_id', id).order('data_vencimento').then(({data}) => setPagamentos(data||[]));
+  }, [id]);
+
+  const atualizarData = async (campo, valor) => {
+    const { error } = await supabase.from('contratos').update({ [campo]: valor }).eq('id', id);
+    if (!error) setContrato(prev => ({...prev, [campo]: valor}));
+  };
+
+  const cancelarContrato = async () => {
+    if(!window.confirm("Tem certeza que deseja cancelar?")) return;
+    const motivo = prompt("Motivo:"); if(!motivo) return;
+    await supabase.from('contratos').update({ status: 'cancelado', motivo_cancelamento: motivo }).eq('id', id);
+    await supabase.from('pendencias').update({ status: 'cancelado' }).eq('contrato_id', id);
+    alert("Cancelado."); navigate('/comercial');
+  };
+
+  const imprimir = () => { window.print(); };
+
+  if(!contrato) return <div className="p-10">Carregando...</div>;
+  const statusColor = contrato.status === 'cancelado' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800';
+
+  // VIEW DE IMPRESSÃO (Escondida normalmente, visível no print)
+  if (modoImpressao) {
+    return (
+      <div className="p-10 font-serif text-sm max-w-4xl mx-auto bg-white min-h-screen">
+        <div className="text-center border-b pb-4 mb-8">
+           <h1 className="text-xl font-bold">{EMPRESA.nome}</h1>
+           <p className="text-xs text-gray-500">{EMPRESA.cnpj} | {EMPRESA.endereco}</p>
+           <h2 className="text-2xl font-bold mt-4">CONTRATO DE PRESTAÇÃO DE SERVIÇOS Nº {contrato.numero_contrato}</h2>
+        </div>
+        <div className="mb-8 text-justify leading-relaxed">
+           <p className="mb-4">
+             Pelo presente instrumento particular, de um lado <strong>{EMPRESA.nome}</strong>, inscrita no CNPJ sob nº {EMPRESA.cnpj}, estabelecida em {EMPRESA.endereco}, doravante denominada <strong>CONTRATADA</strong>, 
+             e de outro lado <strong>{contrato.clientes.nome}</strong>, CPF nº <strong>{contrato.clientes.cpf}</strong>, residente e domiciliado(a) em <strong>{contrato.clientes.endereco}, {contrato.clientes.numero} {contrato.clientes.complemento}, {contrato.clientes.bairro}</strong>, doravante denominado(a) <strong>CONTRATANTE</strong>.
+           </p>
+           <p className="mb-4">
+             <strong>CLÁUSULA PRIMEIRA - DO OBJETO:</strong> O presente contrato tem por objeto o fornecimento e instalação dos produtos descritos no orçamento aprovado, conforme ambientes: 
+             <strong> {contrato.itens_venda?.map(i => i.nome).join(', ')}</strong>.
+           </p>
+           <p className="mb-4">
+             <strong>CLÁUSULA SEGUNDA - DO PREÇO E FORMA DE PAGAMENTO:</strong> Pela execução dos serviços, o CONTRATANTE pagará à CONTRATADA o valor total de <strong>{BRL(contrato.valor_total)}</strong>, 
+             a ser pago da seguinte forma:
+           </p>
+           <div className="ml-4 mb-4 border-l-2 pl-4 border-gray-300">
+             {pagamentos.map((p, i) => (
+               <div key={i}>{p.numero_parcela}ª parcela: {BRL(p.valor_parcela)} - Vencimento: {new Date(p.data_vencimento).toLocaleDateString()} ({p.metodo})</div>
+             ))}
+           </div>
+           <p className="mb-4">
+             <strong>CLÁUSULA TERCEIRA - DOS PRAZOS:</strong> O prazo de entrega será contado a partir da data de medição final e aprovação do projeto executivo.
+           </p>
+        </div>
+        <div className="mt-20 pt-8 border-t border-black grid grid-cols-2 gap-20 text-center">
+           <div>__________________________________________<br/>{EMPRESA.nome}</div>
+           <div>__________________________________________<br/>{contrato.clientes.nome}</div>
+        </div>
+        <div className="fixed bottom-10 right-10 print:hidden flex gap-4">
+           <button onClick={imprimir} className="bg-blue-600 text-white px-6 py-3 rounded font-bold flex items-center gap-2"><Printer/> Imprimir Agora</button>
+           <button onClick={() => setModoImpressao(false)} className="bg-gray-200 text-gray-800 px-6 py-3 rounded font-bold">Voltar</button>
+        </div>
+      </div>
+    );
+  }
+
+  // VIEW NORMAL DO SISTEMA
+  return (
+    <div className="max-w-6xl mx-auto pb-20">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4"><button onClick={() => navigate('/comercial')} className="p-2 hover:bg-gray-200 rounded-full"><ArrowLeft /></button><div><h1 className="text-3xl font-bold text-gray-800">Contrato {contrato.numero_contrato}</h1><span className={`text-xs px-2 py-1 rounded uppercase font-bold ${statusColor}`}>{contrato.status.toUpperCase()}</span></div></div>
+        <div className="flex gap-2">
+           <button onClick={() => setModoImpressao(true)} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 font-bold flex items-center gap-2"><Printer size={16}/> IMPRIMIR CONTRATO</button>
+           {contrato.status !== 'cancelado' && <button onClick={cancelarContrato} className="bg-red-50 text-red-600 px-4 py-2 rounded hover:bg-red-100 font-bold flex items-center gap-2"><XCircle size={16}/> Cancelar</button>}
+        </div>
+      </div>
+      <div className="flex gap-4 border-b mb-6"><button onClick={()=>setTab('geral')} className={`pb-2 px-4 font-bold ${tab==='geral'?'text-blue-600 border-b-2 border-blue-600':'text-gray-500'}`}>Geral / Itens</button><button onClick={()=>setTab('cronograma')} className={`pb-2 px-4 font-bold ${tab==='cronograma'?'text-blue-600 border-b-2 border-blue-600':'text-gray-500'}`}>Cronograma</button><button onClick={()=>setTab('financeiro')} className={`pb-2 px-4 font-bold ${tab==='financeiro'?'text-blue-600 border-b-2 border-blue-600':'text-gray-500'}`}>Financeiro</button></div>
+      {tab === 'geral' && (
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="bg-white p-6 rounded-xl shadow border">
+            <h3 className="font-bold text-lg mb-4 text-blue-800">Dados do Cliente</h3>
+            <div className="space-y-2 text-sm"><p><strong>Nome:</strong> {contrato.clientes?.nome}</p><p><strong>CPF:</strong> {contrato.clientes?.cpf}</p><p><strong>Endereço:</strong> {contrato.clientes?.endereco}, {contrato.clientes?.numero} {contrato.clientes?.complemento}</p><p><strong>Bairro:</strong> {contrato.clientes?.bairro}</p><p><strong>Email:</strong> {contrato.clientes?.email}</p><p><strong>Telefone:</strong> {contrato.clientes?.telefone}</p></div>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow border">
+            <h3 className="font-bold text-lg mb-4 text-green-800">Ambientes (Clique para ver itens)</h3>
+            <div className="space-y-3">
+               {contrato.itens_venda?.map((amb, i) => (
+                 <div key={i} className="border-b pb-2">
+                   <button onClick={() => setExpandedAmbiente(expandedAmbiente === i ? null : i)} className="flex justify-between w-full items-center text-left hover:bg-gray-50 p-1 rounded">
+                     <span className="font-bold flex items-center gap-2 text-gray-700"><Briefcase size={16}/> {amb.nome}</span>
+                     {expandedAmbiente === i ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+                   </button>
+                   {expandedAmbiente === i && (
+                     <div className="mt-2 bg-slate-50 p-3 rounded text-xs">
+                        <table className="w-full">
+                          <thead><tr className="text-left text-gray-500"><th>Peça / Material</th><th className="text-right">Custo</th></tr></thead>
+                          <tbody>{amb.itens?.map((peca, k) => (<tr key={k} className="border-b border-gray-200"><td className="py-1">{peca.descricao}</td><td className="py-1 text-right font-mono text-gray-600">{BRL(peca.custo)}</td></tr>))}</tbody>
+                        </table>
+                     </div>
+                   )}
+                 </div>
+               ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {tab === 'cronograma' && (
+        <div className="bg-white p-6 rounded-xl shadow border">
+          <h3 className="font-bold text-lg mb-6 flex items-center gap-2"><Clock size={20}/> Gestão de Prazos</h3>
+          <div className="grid md:grid-cols-2 gap-6"><div><label className="text-sm font-bold block mb-1">Data da Medição Final</label><input type="date" className="w-full p-2 border rounded" value={contrato.data_medicao_tecnica || ''} onChange={e=>atualizarData('data_medicao_tecnica', e.target.value)}/></div><div><label className="text-sm font-bold block mb-1">Data Pedido Fábrica</label><input type="date" className="w-full p-2 border rounded" value={contrato.data_pedido_fabrica || ''} onChange={e=>atualizarData('data_pedido_fabrica', e.target.value)}/></div><div><label className="text-sm font-bold block mb-1">Previsão Chegada</label><input type="date" className="w-full p-2 border rounded bg-blue-50" value={contrato.data_previsao_chegada || ''} onChange={e=>atualizarData('data_previsao_chegada', e.target.value)}/></div><div><label className="text-sm font-bold block mb-1">Chegada Real</label><input type="date" className="w-full p-2 border rounded" value={contrato.data_chegada_real || ''} onChange={e=>atualizarData('data_chegada_real', e.target.value)}/></div><div><label className="text-sm font-bold block mb-1">Agendamento Montagem</label><input type="date" className="w-full p-2 border rounded bg-yellow-50" value={contrato.data_agendamento_montagem || ''} onChange={e=>atualizarData('data_agendamento_montagem', e.target.value)}/></div><div><label className="text-sm font-bold block mb-1">Conclusão / Entrega</label><input type="date" className="w-full p-2 border rounded bg-green-50" value={contrato.data_conclusao_obra || ''} onChange={e=>atualizarData('data_conclusao_obra', e.target.value)}/></div></div>
+        </div>
+      )}
+      {tab === 'financeiro' && (
+        <div className="bg-white p-6 rounded-xl shadow border">
+           <h3 className="font-bold text-lg mb-4">Parcelas do Contrato</h3>
+           <table className="w-full text-left text-sm"><thead><tr className="bg-gray-50 border-b"><th className="p-2">Parcela</th><th className="p-2">Vencimento</th><th className="p-2">Valor</th><th className="p-2">Método</th></tr></thead><tbody>{pagamentos.map(p => (<tr key={p.id} className="border-b"><td className="p-2">{p.numero_parcela}/{p.total_parcelas_origem}</td><td className="p-2">{new Date(p.data_vencimento).toLocaleDateString()}</td><td className="p-2 font-bold text-green-700">{BRL(p.valor_parcela)}</td><td className="p-2 text-xs uppercase">{p.metodo}</td></tr>))}</tbody></table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- 7. COMERCIAL LIST ---
+function Comercial() {
+  const [activeTab, setActiveTab] = useState('contratos');
+  const [lista, setLista] = useState([]);
+  const navigate = useNavigate();
+  // FORCE REFRESH: UseEffect depende de activeTab, mas adicionamos um listener de foco simples recarregando sempre
+  useEffect(() => {
+    const fetch = () => {
+       const table = activeTab === 'contratos' ? 'contratos' : 'orcamentos';
+       const select = activeTab === 'contratos' ? '*, clientes(nome)' : '*';
+       supabase.from(table).select(select).order('created_at', {ascending:false}).then(({data}) => setLista(data||[]));
+    };
+    fetch();
+    const interval = setInterval(fetch, 2000); // Polling simples de 2s para garantir status atualizado ao voltar
+    return () => clearInterval(interval);
+  }, [activeTab]);
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center"><h1 className="text-3xl font-bold text-gray-800">Comercial</h1><Link to="/novo-orcamento" className="bg-blue-600 text-white px-5 py-3 rounded-lg font-bold flex gap-2"><PlusCircle size={20}/> Novo Orçamento</Link></div>
+      <div className="flex gap-4 border-b"><button onClick={() => setActiveTab('contratos')} className={`pb-2 px-4 font-bold ${activeTab==='contratos'?'text-blue-600 border-b-2 border-blue-600':'text-gray-500'}`}>Contratos</button><button onClick={() => setActiveTab('orcamentos')} className={`pb-2 px-4 font-bold ${activeTab==='orcamentos'?'text-blue-600 border-b-2 border-blue-600':'text-gray-500'}`}>Propostas</button></div>
+      <div className="bg-white rounded-xl shadow overflow-hidden">
+        <table className="w-full text-left">
+          <thead className="bg-gray-50 border-b text-xs uppercase text-gray-500"><tr><th className="p-4">Ref</th><th className="p-4">Cliente</th><th className="p-4">Valor</th><th className="p-4">Status</th></tr></thead>
+          <tbody className="divide-y divide-gray-100">
+            {lista.map(i => (
+              <tr key={i.id} onClick={() => activeTab === 'contratos' && navigate(`/contrato/${i.id}`)} className={`hover:bg-gray-50 ${activeTab === 'contratos' ? 'cursor-pointer' : ''}`}>
+                <td className="p-4 font-mono font-bold text-blue-600">{i.numero_contrato || `#${i.id}`}</td>
+                <td className="p-4">{activeTab==='contratos' ? i.clientes?.nome : i.cliente_nome}</td>
+                <td className="p-4 font-bold text-green-700">{BRL(i.valor_total || i.valor_final || 0)}</td>
+                <td className="p-4"><span className={`text-xs px-2 py-1 rounded uppercase font-bold ${i.status==='cancelado'?'bg-red-100 text-red-800':'bg-green-100 text-green-800'}`}>{i.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// --- 8. OUTROS ---
+function Assistencia() {
+  const [tarefas, setTarefas] = useState([]);
+  useEffect(() => { supabase.from('pendencias').select('*, clientes(nome,endereco), contratos(numero_contrato)').neq('status','cancelado').then(({data}) => setTarefas(data||[])); }, []);
+  return (
+    <div className="space-y-4">
+      <h1 className="text-3xl font-bold text-gray-800">Minha Rota</h1>
+      <div className="grid gap-4 md:grid-cols-3">{tarefas.map(t => (<div key={t.id} className="bg-white p-5 rounded-xl shadow border-l-4 border-blue-500"><h3 className="font-bold">{t.clientes?.nome}</h3><p className="text-xs text-gray-400 font-mono mb-2">CT: {t.contratos?.numero_contrato}</p><p className="text-sm italic mb-2">"{t.descricao}"</p></div>))}</div>
+    </div>
+  );
+}
+const Dashboard = () => <div><h1 className="text-3xl font-bold">🏠 Dashboard</h1></div>;
+const Financeiro = () => <div><h1 className="text-3xl font-bold text-green-700">💰 Financeiro</h1></div>;
+const Marketing = () => <div><h1 className="text-3xl font-bold text-purple-700">📢 Marketing</h1></div>;
+
+// --- 9. ROTAS ---
+function LayoutContent({ children }) { return <div className="flex min-h-screen bg-gray-50"><Sidebar/><main className="flex-1 ml-64 p-8">{children}</main></div>; }
+function Protegida({ children, cargosPermitidos }) {
+  const { user, perfil, loading } = useAuth();
+  if (loading) return <div className="p-10">Carregando...</div>;
+  if (!user) return <Navigate to="/login"/>;
+  if (perfil?.cargo === 'admin') return <LayoutContent>{children}</LayoutContent>;
+  if (cargosPermitidos && !cargosPermitidos.includes(perfil?.cargo)) return <LayoutContent><div className="text-red-600 p-10 font-bold text-center">🚫 Acesso Negado</div></LayoutContent>;
+  return <LayoutContent>{children}</LayoutContent>;
+}
+function Login() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const { user } = useAuth();
+  if (user) return <Navigate to="/"/>;
+  return (
+    <div className="flex items-center justify-center h-screen bg-slate-900">
+      <div className="bg-white p-8 rounded w-96 shadow-lg"><h1 className="text-2xl font-bold mb-6 text-center">Login TemporiPro</h1><form onSubmit={async (e) => { e.preventDefault(); await supabase.auth.signInWithPassword({email, password}); }}><input className="w-full border p-3 rounded mb-4" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email"/><input className="w-full border p-3 rounded mb-4" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Senha"/><button className="w-full bg-blue-900 text-white p-3 rounded font-bold hover:bg-blue-800">Entrar</button></form></div>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/" element={<Protegida cargosPermitidos={['admin','financeiro','consultor','conferente','montador','marketing']}><Dashboard /></Protegida>} />
+            <Route path="/comercial" element={<Protegida cargosPermitidos={['consultor','financeiro','admin']}><Comercial /></Protegida>} />
+            <Route path="/novo-orcamento" element={<Protegida cargosPermitidos={['consultor','financeiro','admin']}><Orcamento /></Protegida>} />
+            <Route path="/fechamento/:id" element={<Protegida cargosPermitidos={['consultor','financeiro','admin']}><Fechamento /></Protegida>} />
+            <Route path="/contrato/:id" element={<Protegida cargosPermitidos={['consultor','financeiro','admin','conferente']}><DetalhesContrato /></Protegida>} />
+            <Route path="/financeiro" element={<Protegida cargosPermitidos={['financeiro']}><Financeiro /></Protegida>} />
+            <Route path="/assistencia" element={<Protegida cargosPermitidos={['consultor','conferente','montador','financeiro']}><Assistencia /></Protegida>} />
+            <Route path="/marketing" element={<Protegida cargosPermitidos={['consultor','marketing','financeiro']}><Marketing /></Protegida>} />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
+  );
+}

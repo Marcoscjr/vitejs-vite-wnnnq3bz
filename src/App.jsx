@@ -6,8 +6,17 @@ import {
   PlusCircle, User, CheckCircle, ArrowLeft, Loader2, 
   MapPin, Calculator, CreditCard, Upload, FileText, Trash2, Calendar, 
   Clock, XCircle, Save, ChevronDown, ChevronUp, Printer, Eye,
-  Users, Award, ArrowUp, ArrowDown, Filter, Download, PieChart, BarChart3, TrendingUp, Layers
+  Users, Award, ArrowUp, ArrowDown, Filter, Download, BarChart3, TrendingUp, Layers, Menu
 } from 'lucide-react';
+
+// --- CONFIGURAÇÃO SUPABASE ---
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// Verificação de segurança para não quebrar a tela se faltar a chave
+const supabase = (supabaseUrl && supabaseKey) 
+  ? createClient(supabaseUrl, supabaseKey) 
+  : null;
 
 // --- DADOS DA EMPRESA ---
 const EMPRESA = {
@@ -39,7 +48,7 @@ const BRL = (valor) => {
   return valor.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
 };
 
-// --- COMPONENTES VISUAIS REUTILIZÁVEIS ---
+// --- COMPONENTES VISUAIS ---
 const Card = ({ children, className = "" }) => (
   <div className={`bg-white p-6 rounded-2xl shadow-lg shadow-slate-200/50 border-0 ${className}`}>
     {children}
@@ -47,7 +56,7 @@ const Card = ({ children, className = "" }) => (
 );
 
 const Button = ({ children, variant = 'primary', className = "", ...props }) => {
-  const base = "px-4 py-2 rounded-xl font-bold flex items-center justify-center gap-2 transition-all transform active:scale-95 focus:ring-2 focus:ring-offset-2 outline-none";
+  const base = "px-4 py-2 rounded-xl font-bold flex items-center justify-center gap-2 transition-all transform active:scale-95 focus:ring-2 focus:ring-offset-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed";
   const variants = {
     primary: "bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 hover:shadow-md focus:ring-blue-500",
     secondary: "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 hover:border-slate-300 focus:ring-slate-400",
@@ -84,7 +93,7 @@ const StatusBadge = ({ status }) => {
   return <span className={`px-3 py-1 rounded-full text-xs uppercase font-extrabold tracking-wider ${color}`}>{status}</span>;
 };
 
-// --- ERROR BOUNDARY (PROTEÇÃO CONTRA TELA BRANCA) ---
+// --- ERROR BOUNDARY ---
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null }; }
   static getDerivedStateFromError(error) { return { hasError: true, error }; }
@@ -101,18 +110,18 @@ class ErrorBoundary extends Component {
   }
 }
 
-// --- CONFIGURAÇÃO ---
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-const supabase = createClient(supabaseUrl, supabaseKey)
-
 // --- AUTH CONTEXT ---
 const AuthContext = createContext({});
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [perfil, setPerfil] = useState(null);
   const [loading, setLoading] = useState(true);
+
   useEffect(() => {
+    if (!supabase) {
+      setLoading(false);
+      return;
+    }
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) { 
         setUser(session.user); 
@@ -127,7 +136,8 @@ function AuthProvider({ children }) {
     });
     return () => subscription.unsubscribe();
   }, []);
-  return <AuthContext.Provider value={{ user, perfil, loading, logout: () => supabase.auth.signOut() }}>{!loading && children}</AuthContext.Provider>;
+
+  return <AuthContext.Provider value={{ user, perfil, loading, logout: () => supabase?.auth.signOut() }}>{!loading && children}</AuthContext.Provider>;
 }
 const useAuth = () => useContext(AuthContext);
 
@@ -135,6 +145,7 @@ const useAuth = () => useContext(AuthContext);
 function Sidebar() {
   const { perfil, logout } = useAuth();
   const location = useLocation();
+  
   const menus = [
     { name: 'Dashboard', path: '/', icon: <LayoutDashboard size={20}/>, roles: ['admin', 'financeiro', 'consultor', 'conferente', 'montador', 'marketing'] },
     { name: 'Comercial', path: '/comercial', icon: <Briefcase size={20}/>, roles: ['admin', 'consultor', 'financeiro'] },
@@ -143,6 +154,7 @@ function Sidebar() {
     { name: 'Técnico / Obras', path: '/assistencia', icon: <Wrench size={20}/>, roles: ['admin', 'consultor', 'conferente', 'montador', 'financeiro'] },
     { name: 'Marketing', path: '/marketing', icon: <Megaphone size={20}/>, roles: ['admin', 'consultor', 'marketing', 'financeiro'] },
   ];
+
   return (
     <aside className="w-72 bg-gradient-to-b from-slate-900 via-[#0f172a] to-indigo-950 text-white flex flex-col h-screen fixed z-50 overflow-y-auto print:hidden shadow-2xl font-sans">
       <div className="p-8 pb-4 flex items-center gap-3">
@@ -151,22 +163,24 @@ function Sidebar() {
         </div>
         <div>
             <h1 className="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-white to-blue-200 tracking-tight leading-none">TemporiPro</h1>
-            <p className="text-[10px] text-blue-300/80 font-medium tracking-wider mt-1 uppercase">Planejamento Inteligente</p>
+            <p className="text-[10px] text-blue-300/80 font-medium tracking-wider mt-1 uppercase">Planejamento</p>
         </div>
       </div>
+
       <div className="px-8 py-4 mb-4 flex items-center gap-3 border-b border-slate-800/50">
           <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-lg font-bold text-blue-400">
-              {perfil?.nome_completo?.charAt(0)}
+              {perfil?.nome_completo?.charAt(0) || 'U'}
           </div>
           <div>
-            <p className="text-sm font-bold text-slate-200 leading-tight">{perfil?.nome_completo}</p>
-            <p className="text-xs text-slate-500 capitalize">{perfil?.cargo}</p>
+            <p className="text-sm font-bold text-slate-200 leading-tight">{perfil?.nome_completo || 'Usuário'}</p>
+            <p className="text-xs text-slate-500 capitalize">{perfil?.cargo || 'Acesso'}</p>
           </div>
       </div>
+
       <nav className="flex-1 px-4 space-y-2">
         {menus.map(m => {
           if (perfil?.cargo !== 'admin' && !m.roles.includes(perfil?.cargo)) return null;
-          const active = location.pathname.includes(m.path) && m.path !== '/';
+          const active = location.pathname === m.path || location.pathname.startsWith(m.path + '/');
           return (
             <Link key={m.path} to={m.path} className={`group flex gap-4 px-4 py-3.5 rounded-xl transition-all duration-200 items-center font-medium ${active ? 'bg-gradient-to-r from-blue-600/90 to-indigo-600/90 text-white shadow-md shadow-blue-900/30' : 'hover:bg-slate-800/50 text-slate-400 hover:text-slate-100'}`}>
                 <span className={`transition-transform group-hover:scale-110 ${active ? 'text-white' : 'text-slate-500 group-hover:text-blue-400'}`}>{m.icon}</span>
@@ -185,7 +199,8 @@ function Sidebar() {
   );
 }
 
-// --- DASHBOARD ---
+// --- PÁGINAS ---
+
 function Dashboard() {
   const [stats, setStats] = useState({ vendas: [], caixa: { saldo:0, aReceber10:0, aPagar10:0 } });
   
@@ -198,9 +213,12 @@ function Dashboard() {
       const hoje = new Date();
       const em10Dias = new Date(); em10Dias.setDate(hoje.getDate() + 10);
       
-      const saldoAtual = (trans?.filter(t=>t.status==='realizado'&&t.tipo==='receita').reduce((a,b)=>a+b.valor,0)||0) - (trans?.filter(t=>t.status==='realizado'&&t.tipo==='despesa').reduce((a,b)=>a+b.valor,0)||0) + (pags?.filter(p=>p.status==='pago').reduce((a,b)=>a+b.valor_parcela,0)||0);
-      const receber10 = pags?.filter(p => p.status === 'pendente' && new Date(p.data_vencimento) <= em10Dias).reduce((a,b)=>a+b.valor_parcela,0)||0;
-      const pagar10 = trans?.filter(t => t.tipo==='despesa' && t.status==='pendente' && new Date(t.data_movimento) <= em10Dias).reduce((a,b)=>a+b.valor,0)||0;
+      const saldoAtual = (trans?.filter(t=>t.status==='realizado'&&t.tipo==='receita').reduce((a,b)=>a+(b.valor||0),0)||0) 
+                       - (trans?.filter(t=>t.status==='realizado'&&t.tipo==='despesa').reduce((a,b)=>a+(b.valor||0),0)||0) 
+                       + (pags?.filter(p=>p.status==='pago').reduce((a,b)=>a+(b.valor_parcela||0),0)||0);
+      
+      const receber10 = pags?.filter(p => p.status === 'pendente' && new Date(p.data_vencimento) <= em10Dias).reduce((a,b)=>a+(b.valor_parcela||0),0)||0;
+      const pagar10 = trans?.filter(t => t.tipo==='despesa' && t.status==='pendente' && new Date(t.data_movimento) <= em10Dias).reduce((a,b)=>a+(b.valor||0),0)||0;
 
       setStats({ vendas: vendas || [], caixa: { saldo: saldoAtual, aReceber10: receber10, aPagar10: pagar10 } });
     };
@@ -213,13 +231,20 @@ function Dashboard() {
           <h1 className="text-4xl font-extrabold text-slate-800 tracking-tight">Dashboard</h1>
           <p className="text-slate-500 mt-1">Visão geral do seu negócio hoje.</p>
       </div>
+      
       <div className="grid md:grid-cols-3 gap-6">
         <div className="bg-gradient-to-br from-slate-800 to-indigo-900 text-white p-8 rounded-3xl shadow-2xl shadow-indigo-900/30 col-span-2 relative overflow-hidden">
           <div className="absolute top-0 right-0 -mt-10 -mr-10 opacity-10"><Wallet size={150}/></div>
           <div className="relative z-10">
             <div className="flex justify-between items-start mb-8">
-                <div><h2 className="text-xl font-bold text-blue-100 flex items-center gap-2 mb-1"><Clock size={22} className="text-blue-300"/> Fluxo de Caixa (10 Dias)</h2><p className="text-sm text-blue-300/80">Previsão baseada em parcelas e agendamentos.</p></div>
-                <div className="text-right"><p className="text-sm text-blue-300 font-bold uppercase tracking-wider mb-1">Saldo Projetado</p><p className="text-4xl font-extrabold text-white tracking-tight">{BRL(stats.caixa.saldo + stats.caixa.aReceber10 - stats.caixa.aPagar10)}</p></div>
+                <div>
+                    <h2 className="text-xl font-bold text-blue-100 flex items-center gap-2 mb-1"><Clock size={22} className="text-blue-300"/> Fluxo de Caixa (10 Dias)</h2>
+                    <p className="text-sm text-blue-300/80">Previsão baseada em parcelas e agendamentos.</p>
+                </div>
+                <div className="text-right">
+                    <p className="text-sm text-blue-300 font-bold uppercase tracking-wider mb-1">Saldo Projetado</p>
+                    <p className="text-4xl font-extrabold text-white tracking-tight">{BRL(stats.caixa.saldo + stats.caixa.aReceber10 - stats.caixa.aPagar10)}</p>
+                </div>
             </div>
             <div className="grid grid-cols-3 gap-6 border-t border-white/10 pt-6">
                 <div><p className="text-xs text-blue-300 uppercase font-bold mb-1">Saldo Hoje</p><p className="font-bold text-2xl">{BRL(stats.caixa.saldo)}</p></div>
@@ -228,33 +253,40 @@ function Dashboard() {
             </div>
           </div>
         </div>
+
         <Card className="flex flex-col justify-center items-center bg-gradient-to-br from-blue-500 to-blue-600 text-white border-0">
            <div className="bg-white/20 p-4 rounded-full mb-4"><BarChart3 size={40} className="text-white"/></div>
            <h3 className="text-blue-100 font-bold uppercase tracking-wider text-sm mb-1">Total Vendas (Mês)</h3>
-           <p className="text-4xl font-extrabold">{BRL(stats.vendas.reduce((a,b)=>a+b.valor_total,0))}</p>
+           <p className="text-4xl font-extrabold">
+             {BRL(stats.vendas.reduce((a,b)=>a+(b.valor_total||0),0))}
+           </p>
         </Card>
       </div>
+
       <Card>
-        <h3 className="font-bold text-slate-700 mb-8 flex items-center gap-3 text-xl"><div className="p-2 bg-blue-100 text-blue-600 rounded-lg"><TrendingUp size={24}/></div> Evolução de Vendas Recentes</h3>
+        <h3 className="font-bold text-slate-700 mb-8 flex items-center gap-3 text-xl">
+          <div className="p-2 bg-blue-100 text-blue-600 rounded-lg"><TrendingUp size={24}/></div> 
+          Evolução de Vendas Recentes
+        </h3>
         <div className="h-64 flex items-end gap-3 px-4 pb-4 border-b border-slate-100">
+          {stats.vendas.length === 0 && <p className="w-full text-center text-slate-400 self-center font-medium">Sem dados de vendas suficientes para o gráfico.</p>}
           {stats.vendas.slice(-15).map((v, i) => {
             const height = Math.min((v.valor_total/20000)*100, 100);
             return (
-            <div key={i} className="flex-1 flex flex-col justify-end group relative">
-              <div className="bg-gradient-to-t from-blue-400 to-indigo-400 rounded-t-xl hover:from-blue-500 hover:to-indigo-500 transition-all relative w-full" style={{height: `${height}%`, minHeight: '10%'}}>
-                <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-xl whitespace-nowrap z-10">{BRL(v.valor_total)}</div>
+              <div key={i} className="flex-1 flex flex-col justify-end group relative">
+                <div className="bg-gradient-to-t from-blue-400 to-indigo-400 rounded-t-xl hover:from-blue-500 hover:to-indigo-500 transition-all relative w-full" style={{height: `${height}%`, minHeight: '10%'}}>
+                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-xl whitespace-nowrap z-10">{BRL(v.valor_total)}</div>
+                </div>
+                <p className="text-[10px] text-slate-400 text-center mt-2 font-medium truncate">{new Date(v.created_at).toLocaleDateString().slice(0,5)}</p>
               </div>
-              <p className="text-[10px] text-slate-400 text-center mt-2 font-medium truncate">{new Date(v.created_at).toLocaleDateString().slice(0,5)}</p>
-            </div>
-          )})}
-          {stats.vendas.length === 0 && <p className="w-full text-center text-slate-400 self-center font-medium">Sem dados de vendas suficientes para o gráfico.</p>}
+            )
+          })}
         </div>
       </Card>
     </div>
   );
 }
 
-// --- FINANCEIRO 2.0 ---
 function Financeiro() {
   const [tab, setTab] = useState('fluxo'); 
   const [extrato, setExtrato] = useState([]);
@@ -278,8 +310,8 @@ function Financeiro() {
     ].sort((a,b) => new Date(b.data) - new Date(a.data));
 
     const audit = (conts||[]).map(c => {
-      const gastos = (trans||[]).filter(t => t.contrato_id === c.id && t.tipo === 'despesa').reduce((a,b)=>a+b.valor,0);
-      return { ...c, custo_real: gastos, lucro: c.valor_total - gastos, margem: c.valor_total ? ((c.valor_total - gastos)/c.valor_total)*100 : 0 };
+      const gastos = (trans||[]).filter(t => t.contrato_id === c.id && t.tipo === 'despesa').reduce((a,b)=>a+(b.valor||0),0);
+      return { ...c, custo_real: gastos, lucro: (c.valor_total||0) - gastos, margem: c.valor_total ? (((c.valor_total - gastos)/c.valor_total)*100) : 0 };
     });
 
     setExtrato(fluxo); setAuditoria(audit); setContratos(conts||[]);
@@ -383,7 +415,10 @@ function Financeiro() {
                 </Select>
               </div>
               <Select value={novaTransacao.contrato_id} onChange={e=>setNovaTransacao({...novaTransacao, contrato_id:e.target.value})}>
-                <option value="">-- Sem Vínculo (Opocional) --</option>{contratos.map(c=><option key={c.id} value={c.id}>{c.numero_contrato} - {c.clientes?.nome}</option>)}
+                <option value="">-- Sem Vínculo (Opocional) --</option>
+                {contratos.map(c => (
+                  <option key={c.id} value={c.id}>{c.numero_contrato} - {c.clientes?.nome}</option>
+                ))}
               </Select>
               <div className="flex gap-3 mt-4">
                 <Button type="button" variant="secondary" onClick={()=>setShowModal(false)} className="flex-1">Cancelar</Button>
@@ -549,24 +584,7 @@ function DetalhesContrato() {
           </div>
         </div>
       )}
-      {showCustoModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50">
-          <Card className="w-80 shadow-2xl">
-            <h3 className="font-bold text-xl mb-6 text-rose-700">Novo Custo</h3>
-            <form onSubmit={lancarCustoDireto} className="space-y-4">
-              <Input required placeholder="Descrição (ex: Vidraçaria)" value={novoCusto.descricao} onChange={e=>setNovoCusto({...novoCusto, descricao:e.target.value})}/>
-              <Input required type="number" placeholder="Valor R$" value={novoCusto.valor} onChange={e=>setNovoCusto({...novoCusto, valor:e.target.value})}/>
-              <Select value={novoCusto.categoria} onChange={e=>setNovoCusto({...novoCusto, categoria:e.target.value})}>
-                <option>Material</option><option>Mão de Obra</option><option>Instalação</option><option>Outros</option>
-              </Select>
-              <div className="flex gap-3 mt-6">
-                <Button type="button" variant="secondary" onClick={()=>setShowCustoModal(false)} className="flex-1">Cancelar</Button>
-                <Button variant="danger" className="flex-1">Salvar Despesa</Button>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
+      {showCustoModal && (<div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50"><Card className="w-80 shadow-2xl"><h3 className="font-bold text-xl mb-6 text-rose-700">Novo Custo</h3><form onSubmit={lancarCustoDireto} className="space-y-4"><Input required placeholder="Descrição (ex: Vidraçaria)" value={novoCusto.descricao} onChange={e=>setNovoCusto({...novoCusto, descricao:e.target.value})}/><Input required type="number" placeholder="Valor R$" value={novoCusto.valor} onChange={e=>setNovoCusto({...novoCusto, valor:e.target.value})}/><Select value={novoCusto.categoria} onChange={e=>setNovoCusto({...novoCusto, categoria:e.target.value})}><option>Material</option><option>Mão de Obra</option><option>Instalação</option><option>Outros</option></Select><div className="flex gap-3 mt-6"><Button type="button" variant="secondary" onClick={()=>setShowCustoModal(false)} className="flex-1">Cancelar</Button><Button variant="danger" className="flex-1">Salvar Despesa</Button></div></form></Card></div>)}
     </div>
   );
 }
@@ -735,6 +753,8 @@ function Comercial() {
 
 // --- 8. OUTROS ---
 function Assistencia() { const [t, setT] = useState([]); useEffect(() => { supabase.from('pendencias').select('*, clientes(nome,endereco), contratos(numero_contrato)').neq('status','cancelado').then(({data}) => setT(data||[])); }, []); return <div className="space-y-8"><div><h1 className="text-3xl font-extrabold text-slate-800">Técnico / Obras</h1><p className="text-slate-500">Minha rota de serviço.</p></div><div className="grid gap-6 md:grid-cols-3">{t.map(i=><Card key={i.id} className="border-l-4 border-l-blue-500 hover:shadow-xl transition-all"><h3 className="font-bold text-lg text-slate-800 mb-1">{i.clientes?.nome}</h3><p className="text-xs font-mono text-blue-500 mb-4 bg-blue-50 inline-block px-2 py-1 rounded">{i.contratos?.numero_contrato}</p><p className="text-slate-600 italic border-l-2 border-slate-200 pl-4 py-2 bg-slate-50 rounded-r-lg">"{i.descricao}"</p></Card>)}</div></div>; }
+
+const Marketing = () => <div className="space-y-8"><div><h1 className="text-3xl font-extrabold text-slate-800">Marketing</h1><p className="text-slate-500">Campanhas e leads.</p></div><Card><div className="text-center p-12 text-slate-400">Em desenvolvimento...</div></Card></div>;
 
 // --- 9. ROTAS E LAYOUT FINAL ---
 function LayoutContent({ children }) { return <div className="flex min-h-screen bg-[#f8fafc] font-sans"><Sidebar/><main className="flex-1 ml-72 p-10 print:ml-0 print:p-0 print:bg-white">{children}</main></div>; }
